@@ -35,7 +35,10 @@ export class CaseService {
     });
     await newCase.save();
 
-    return newCase;
+    return (await Case.findOne({
+      where: { id: newCase.id },
+      relations: ['user', 'apply'],
+    })) as Case;
   }
 
   public async getAll(): Promise<Case[]> {
@@ -44,13 +47,70 @@ export class CaseService {
     });
   }
 
+  public async findOne(id: number): Promise<Case | null> {
+    const caseEntity = await Case.findOne({
+      where: { id },
+      relations: ['user', 'apply'],
+    });
+
+    if (!caseEntity) {
+      throw new Error(`Case with id ${id} not found`);
+    }
+
+    return caseEntity;
+  }
+
+  public async update(
+    id: number,
+    data: {
+      startDate?: string;
+      endDate?: string;
+      status?: boolean;
+    },
+  ): Promise<Case> {
+    const caseToUpdate = await Case.findOne({ where: { id } });
+
+    if (!caseToUpdate) {
+      throw new Error(`Case with id ${id} not found`);
+    }
+
+    if (data.startDate !== undefined) {
+      caseToUpdate.startDate = data.startDate;
+    }
+    if (data.endDate !== undefined) {
+      caseToUpdate.endDate = data.endDate;
+    }
+    if (data.status !== undefined) {
+      caseToUpdate.status = data.status;
+    }
+
+    await caseToUpdate.save();
+
+    return (await Case.findOne({
+      where: { id },
+      relations: ['user', 'apply'],
+    })) as Case;
+  }
+
   public async delete(id: number): Promise<void> {
-    const caseToDelete = await Case.findOne({ where: { id } });
+    const caseToDelete = await Case.findOne({
+      where: { id },
+      relations: ['apply'],
+    });
 
     if (!caseToDelete) {
       throw new Error(`Case with id ${id} not found`);
     }
 
+    const applyId = caseToDelete.apply?.id;
+
     await caseToDelete.remove();
+
+    if (applyId) {
+      const applyToDelete = await Apply.findOne({ where: { id: applyId } });
+      if (applyToDelete) {
+        await applyToDelete.remove();
+      }
+    }
   }
 }
