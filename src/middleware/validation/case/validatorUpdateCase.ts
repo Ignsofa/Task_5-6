@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import validator from 'validator';
 
-export const validatorCreateCase = (req: Request, res: Response, next: NextFunction) => {
+export const validatorUpdateCase = (req: Request, res: Response, next: NextFunction) => {
   const { startDate, endDate, status } = req.body;
   const errors: string[] = [];
 
