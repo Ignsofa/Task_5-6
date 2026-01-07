@@ -62,6 +62,329 @@ Containers created:
 - Commit messages must meet [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) format.  
   After staging changes just run `npm run commit` and get instant feedback on your commit message formatting and be prompted for required fields by [Commitizen](https://github.com/commitizen/cz-cli)
 
+---
+
+## Лабораторні роботи №5-6: Detective Agency System
+
+### Предметна область
+
+Система управління детективними справами з трьома основними сутностями:
+
+- **User (Користувач)** – детективи та адміністратори системи з двома ролями: STANDARD (детективи) та ADMINISTRATOR.
+- **Case (Справа)** – детективні справи з датами розслідування (startDate, endDate) та статусом (Active/Closed). Кожна справа належить одному користувачу.
+- **Apply (Заявка)** – заявки клієнтів з описом проблеми. Кожна справа має одну заявку, яка описує суть запиту.
+
+Усі сутності створені через міграції (`src/orm/migrations/1767753484485-AddDetectiveTables.ts`) та заповнені тестовими даними (`src/orm/seeds/1590519635401-SeedUsers.ts`).
+
+
+**Зв'язки:**
+- User ↔ Case: One-to-Many (один користувач має багато справ)
+- Case ↔ Apply: One-to-One (одна справа має одну заявку)
+
+---
+
+## API Endpoints (Лаб №5)
+
+### Аутентифікація
+
+| Метод | Endpoint | Опис |
+|-------|----------|------|
+| POST | `/v1/auth/login` | Вхід та отримання JWT токену |
+| POST | `/v1/auth/register` | Реєстрація нового користувача |
+| POST | `/v1/auth/change-password` | Зміна пароля (потрібен JWT) |
+
+### Cases (захищено JWT)
+
+| Метод | Endpoint | Опис | Доступ |
+|-------|----------|------|--------|
+| POST | `/cases` | Створення нової справи | Authenticated |
+| GET | `/cases` | Отримання всіх справ | Authenticated |
+| GET | `/cases/:id` | Отримання однієї справи | Authenticated |
+| PUT | `/cases/:id` | Оновлення справи | Authenticated |
+| DELETE | `/cases/:id` | Видалення справи | ADMINISTRATOR |
+
+Усі endpoints повертають дані з JOIN'ами (вкладені об'єкти user та apply)!**
+
+### Приклад відповіді з JOIN'ами
+
+**GET /cases/4**
+
+```json
+{
+  "id": 4,
+  "startDate": "2025-01-10",
+  "endDate": "2025-01-31",
+  "status": "Active",
+  "user": {
+    "id": 10,
+    "email": "alberto.salamanca@test.com",
+    "username": "Tuco",
+    "name": "Alberto Salamanca",
+    "role": "STANDARD"
+  },
+  "apply": {
+    "id": 4,
+    "date": "2026-01-07",
+    "request": "Розслідування пропажі документів"
+  }
+}
+```
+
+**Не просто `userId: 10` та `applyId: 4`, а повні об'єкти з усіма даними!** 
+
+---
+
+## Архітектура додатку (Лаб №6)
+
+Для підтримки чистого коду контролерів ми використовуємо три явні шари:
+
+- **Middleware Validation** – наприклад, `src/middleware/validation/validatorCreateCase.ts` перевіряє обов'язкові поля, формати дат та бізнес-правила _до того_, як контролер виконається.
+- **Controllers** – тільки оркестрація запитів. Вони створюють екземпляр сервісу, передають вже валідовані дані та формують HTTP відповідь.
+- **Services** – вся бізнес-логіка та доступ до репозиторію (TypeORM) знаходиться тут. Кожна сутність має один сервіс (`src/services/**`), який приховує деталі персистентності від контролерів.
+- **Repositories/DataSource** – керуються виключно сервісами через TypeORM Active Record або `getRepository`, тримаючи доступ до даних ізольованим.
+
+
+---
+
+## Приклади коду (Лаб №6)
+
+### Приклад middleware
+
+```typescript
+// src/middleware/validation/validatorUpdateCase.ts
+import { NextFunction, Request, Response } from 'express';
+import validator from 'validator';
+
+export const validatorUpdateCase = (req: Request, res: Response, next: NextFunction) => {
+  const { startDate, endDate, status } = req.body;
+  const errors: string[] = [];
+  
+  if (!startDate && !endDate && status === undefined) {
+    errors.push('At least one field must be provided for update (startDate, endDate, or status)');
+  }
+  
+  if (startDate !== undefined) {
+    if (!validator.isDate(startDate)) {
+      errors.push('Field "startDate" must be a valid date (YYYY-MM-DD)');
+    }
+  }
+  
+  if (endDate !== undefined) {
+    if (!validator.isDate(endDate)) {
+      errors.push('Field "endDate" must be a valid date (YYYY-MM-DD)');
+    }
+  }
+  
+  if (startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (end < start) {
+      errors.push('Field "endDate" cannot be earlier than "startDate"');
+    }
+  }
+  
+  if (errors.length > 0) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors,
+    });
+  }
+
+  return next();
+};
+```
+
+### Приклад DTO
+
+```typescript
+// src/dto/CaseResponseDTO.ts
+import { Case } from '../orm/entities/Case';
+
+export class CaseResponseDTO {
+  id: number;
+  startDate: string;
+  endDate: string;
+  status: string;
+
+  user: {
+    id: number;
+    email: string;
+    username: string | null;
+    name: string | null;
+    role: string;
+  } | null;
+
+  apply: {
+    id: number;
+    date: string;
+    request: string;
+  } | null;
+
+  constructor(caseEntity: Case) {
+    this.id = caseEntity.id;
+    this.startDate = caseEntity.startDate;
+    this.endDate = caseEntity.endDate;
+    this.status = caseEntity.status ? 'Closed' : 'Active';
+    
+    if (caseEntity.user) {
+      this.user = {
+        id: caseEntity.user.id,
+        email: caseEntity.user.email,
+        username: caseEntity.user.username,
+        name: caseEntity.user.name,
+        role: caseEntity.user.role,
+      };
+    } else {
+      this.user = null;
+    }
+    
+    if (caseEntity.apply) {
+      this.apply = {
+        id: caseEntity.apply.id,
+        date: caseEntity.apply.date,
+        request: caseEntity.apply.request,
+      };
+    } else {
+      this.apply = null;
+    }
+  }
+}
+```
+
+### Приклад Service
+
+```typescript
+// src/services/CaseService.ts
+import { getRepository } from 'typeorm';
+import { Apply } from '../orm/entities/Apply';
+import { Case } from '../orm/entities/Case';
+import { User } from '../orm/entities/users/User';
+
+export class CaseService {
+  public async create(data: {
+    userId: number;
+    requestText: string;
+    startDate: string;
+    endDate: string;
+  }): Promise<Case> {
+    const { userId, requestText, startDate, endDate } = data;
+    
+    const userRepo = getRepository(User);
+    const user = await userRepo.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new Error(`User with id ${userId} not found`);
+    }
+    
+    const newApply = Apply.create({
+      date: new Date().toISOString().split('T')[0],
+      request: requestText,
+    });
+    await newApply.save();
+    
+    const newCase = Case.create({
+      startDate: startDate,
+      endDate: endDate,
+      status: false,
+      user: user,
+      apply: newApply,
+    });
+    await newCase.save();
+    
+    return (await Case.findOne({
+      where: { id: newCase.id },
+      relations: ['user', 'apply'],
+    })) as Case;
+  }
+
+  public async delete(id: number): Promise<void> {
+    const caseToDelete = await Case.findOne({
+      where: { id },
+      relations: ['apply'],
+    });
+
+    if (!caseToDelete) {
+      throw new Error(`Case with id ${id} not found`);
+    }
+
+    const applyId = caseToDelete.apply?.id;
+    
+    await caseToDelete.remove();
+
+    if (applyId) {
+      const applyToDelete = await Apply.findOne({ where: { id: applyId } });
+      if (applyToDelete) {
+        await applyToDelete.remove();
+      }
+    }
+  }
+}
+```
+
+---
+
+## Postman докази роботи
+
+### Помилка валідації (middleware блокує некоректний payload)
+
+![Validation error screenshot](screenshots/05-update-validation-error.jpg)
+
+**Запит:**
+```json
+{
+  "startDate": "2025-02-20",
+  "endDate": "2025-02-01"
+}
+```
+
+**Відповідь (400 Bad Request):**
+```json
+{
+  "message": "Validation failed",
+  "errors": [
+    "Field \"endDate\" cannot be earlier than \"startDate\""
+  ]
+}
+```
+
+### Успішна відповідь з JOIN'ами (DTO у відповіді)
+
+![Success screenshot](screenshots/01-create-case-with-joins.jpg)
+
+**Відповідь (201 Created):**
+```json
+{
+  "id": 4,
+  "startDate": "2025-01-10",
+  "endDate": "2025-01-31",
+  "status": "Active",
+  "user": {
+    "id": 10,
+    "email": "alberto.salamanca@test.com",
+    "username": "Tuco",
+    "name": "Alberto Salamanca",
+    "role": "STANDARD"
+  },
+  "apply": {
+    "id": 4,
+    "date": "2026-01-07",
+    "request": "Розслідування пропажі документів"
+  }
+}
+```
+
+![02](screenshots/02.jpg)
+![03](screenshots/03.jpg)
+![04](screenshots/04.jpg)
+![06](screenshots/06.jpg)
+![07](screenshots/07.jpg)
+![08](screenshots/08.jpg)
+![09](screenshots/9.jpg)
+![10](screenshots/10.jpg)
+![11](screenshots/11.jpg)
+
+
 ## Other awesome boilerplates:
 
 Each boilerplate comes with it's own flavor of libraries and setup, check out others:
